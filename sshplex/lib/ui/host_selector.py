@@ -10,6 +10,7 @@ from textual.reactive import reactive
 from textual.screen import Screen
 from textual import events
 import asyncio
+import fnmatch
 import pyperclip
 
 from ... import __version__
@@ -743,24 +744,61 @@ class HostSelector(App):
             self.filter_hosts()
 
     def filter_hosts(self) -> None:
-        term = (self.search_filter or "").lower()
-        import fnmatch
+        raw = (self.search_filter or "").strip().lower()
 
-        term = (term or "").strip().lower()
+        if not raw:
+            self.filtered_hosts = self.hosts.copy()
+            self.populate_table(self.get_hosts_to_display())
+            self.update_status_selection()
+            return
 
-        # Automatically add wildcards around the search term
-        if not term.startswith("*"):
-            term = "*" + term
-        if not term.endswith("*"):
-            term = term + "*"
+        # Tokenize and build OR-of-AND-groups.
+        # Rules:
+        #   space        → implicit OR (each bare token starts a new OR clause)
+        #   'or' keyword → explicit OR (same effect as space)
+        #   'and' keyword → next token is AND-ed into the current clause
+        tokens = raw.split()
+        or_groups: list = []
+        current: list = []
+        next_is_and = False
 
-        self.filtered_hosts = [
-            host for host in self.hosts
-            if any(
-                fnmatch.fnmatchcase((getattr(host, attr, "") or "").lower(), term)
-                for attr in self.config.ui.table_columns
-            )
-        ]
+        for token in tokens:
+            if token == "or":
+                if current:
+                    or_groups.append(current)
+                    current = []
+                next_is_and = False
+            elif token == "and":
+                next_is_and = True
+            else:
+                if not next_is_and and current:
+                    # implicit OR: close the current AND-group
+                    or_groups.append(current)
+                    current = []
+                pattern = token if token.startswith("*") else f"*{token}"
+                pattern = pattern if pattern.endswith("*") else f"{pattern}*"
+                current.append(pattern)
+                next_is_and = False
+
+        if current:
+            or_groups.append(current)
+
+        if not or_groups:
+            self.filtered_hosts = self.hosts.copy()
+        else:
+            self.filtered_hosts = [
+                host for host in self.hosts
+                if any(
+                    all(
+                        any(
+                            fnmatch.fnmatchcase((getattr(host, attr, "") or "").lower(), term)
+                            for attr in self.config.ui.table_columns
+                        )
+                        for term in and_group
+                    )
+                    for and_group in or_groups
+                )
+            ]
 
         # Re-populate table with filtered results
         self.populate_table(self.get_hosts_to_display())
