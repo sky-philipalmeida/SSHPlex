@@ -10,6 +10,7 @@ from textual.reactive import reactive
 from textual.screen import Screen
 from textual import events
 import asyncio
+import fnmatch
 import pyperclip
 
 from ... import __version__
@@ -258,22 +259,25 @@ class HostSelector(App):
         if not self.table:
             return
 
+        # Calculate total columns to distribute width proportionally
+        # total_columns = len(self.config.ui.table_columns) + 1  # +1 for checkbox
+
         # Add checkbox column (fixed small width)
         self.table.add_column("✓", width=3, key="checkbox")
 
         # Add configured columns with proportional widths
         for column in self.config.ui.table_columns:
-            self.table.add_column(column, width=None, key=column)
+          self.table.add_column(column, width=None, key=column)
 
     def on_data_table_header_selected(self, event: DataTable.HeaderSelected):
-        col = event.column_key.value
-        self.sort_reverse = not self.sort_reverse
-        hosts_to_display = self.get_hosts_to_display()
-        hosts_to_display.sort(
-            key=lambda r: getattr(r, col, ""),
-            reverse=self.sort_reverse
-        )
-        self.populate_table(hosts_to_display)
+      col = event.column_key.value
+      self.sort_reverse = not self.sort_reverse
+      hosts_to_display = self.get_hosts_to_display()
+      hosts_to_display.sort(
+          key=lambda r: getattr(r, col, ""),
+          reverse=self.sort_reverse
+      )
+      self.populate_table(hosts_to_display)
 
     def show_loading_screen(self, message: str = "🔄 Refreshing Data Sources", status: str = "Initializing...") -> None:
         """Show the loading screen modal."""
@@ -430,9 +434,10 @@ class HostSelector(App):
             if show_loading:
                 self.hide_loading_screen()
 
-    def get_hosts_to_display(self) -> List[Host]:
-        """Return filtered hosts if search is active, otherwise all hosts."""
-        return self.filtered_hosts if self.search_filter else self.hosts
+    # Use filtered hosts if search is active, otherwise use all hosts
+    def get_hosts_to_display(self)-> None:
+      hosts_to_display = self.filtered_hosts if self.search_filter else self.hosts
+      return hosts_to_display
 
     def populate_table(self, hosts_to_display) -> None:
         """Populate the table with host data."""
@@ -546,24 +551,86 @@ class HostSelector(App):
 
     def action_connect_selected(self) -> None:
         """Connect to selected hosts and exit the application."""
+        self.log_message("INFO: Enter key pressed - processing connection request", level="info")
+
         if not self.selected_hosts:
-            self.log_message("No hosts selected for connection", level="warning")
+            self.log_message("WARNING: No hosts selected for connection", level="warning")
             return
 
         selected_host_objects = [h for h in self.hosts if h.name in self.selected_hosts]
-        if not selected_host_objects:
-            self.log_message("No hosts found matching selection", level="warning")
-            return
-
         mode = "Panes" if self.use_panes else "Tabs"
         broadcast = "ON" if self.use_broadcast else "OFF"
-        self.log_message(f"Connecting to {len(selected_host_objects)} hosts in {mode} mode, Broadcast {broadcast}")
+        self.log_message(f"INFO: Connecting to {len(selected_host_objects)} selected hosts in {mode} mode with Broadcast {broadcast}...", level="info")
 
+        # just log the selection
         for host in selected_host_objects:
-            self.log_message(f"  - {host.name} ({host.ip})")
+            self.log_message(f"INFO: Would connect to: {host.name} ({host.ip}) - Cluster: {getattr(host, 'cluster', 'N/A')}", level="info")
 
-        # Exit the TUI and return selected hosts for connection by main.py
-        self.exit(selected_host_objects)
+        self.log_message(f"INFO: Connection request complete. Mode: {mode}, Broadcast: {broadcast}, Hosts: {len(selected_host_objects)}", level="info")
+        self.log_message("INFO: Exiting SSHplex TUI application...", level="info")
+
+        # Log the settings and selection results
+        mode = "Panes" if self.use_panes else "Tabs"
+        broadcast = "ON" if self.use_broadcast else "OFF"
+        self.log_message(f"SSHplex settings - Mode: {mode}, Broadcast: {broadcast}")
+
+        # The app.run() may return None or a list of hosts
+        if isinstance(selected_host_objects, list) and len(selected_host_objects) > 0:
+            self.log_message(f"User selected {len(selected_host_objects)} hosts for connection")
+            for host in selected_host_objects:
+                self.log_message(f"  - {host.name} ({host.ip})")
+
+            # Create tmux panes or windows for selected hosts
+            mode = "panes" if self.use_panes else "windows"
+            self.log_message(f"SSHplex: Creating tmux {mode} for selected hosts")
+
+            # Create connector with timestamped session name and max panes per window
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            session_name = f"sshplex-{timestamp}"
+            from ...sshplex_connector import SSHplexConnector
+            connector = SSHplexConnector(session_name, config = self.config)
+
+            # Connect to hosts (creates panes or windows with SSH connections)
+            if connector.connect_to_hosts(
+                hosts=selected_host_objects,
+                username=self.config.ssh.username,
+                key_path=self.config.ssh.key_path,
+                port=self.config.ssh.port,
+                use_panes=self.use_panes,
+                use_broadcast=self.use_broadcast
+            ):
+                session_name = connector.get_session_name()
+                mode_display = "panes" if self.use_panes else "windows"
+                self.log_message(f"SSHplex: Successfully created tmux session '{session_name}' with {mode_display}")
+                self.log_message(f"SSHplex: {len(selected_host_objects)} SSH connections established")
+
+                # Display success message and auto-attach
+                print(f"\n✅ SSHplex Session Created Successfully!")
+                print(f"📡 tmux session: {session_name}")
+                print(f"🔗 {len(selected_host_objects)} SSH connections established in {mode_display}")
+                broadcast_status = " (ENABLED)" if self.use_broadcast else " (DISABLED)"
+                print(f"📢 Broadcast mode: {broadcast_status}")
+                print(f"\n🚀 Auto-attaching to session...")
+                print(f"\n⚡ tmux commands (once attached):")
+                if self.use_panes:
+                    print(f"   - Switch panes: Ctrl+b then arrow keys")
+                else:
+                    print(f"   - Switch windows: Ctrl+b then n/p or number keys")
+                print(f"   - Toggle broadcast: Ctrl+b then b")
+                print(f"   - Detach session: Ctrl+b then d")
+                print(f"   - List sessions: tmux list-sessions")
+
+                # Auto-attach to the session (this will replace the current process)
+                connector.attach_to_session(auto_attach=True)
+            else:
+                self.log_message("SSHplex: Failed to create SSH connections")
+                return 1
+
+        else:
+            self.log_message("No hosts were selected")
+
+        # Exit the app and return selected hosts
+        self.action_deselect_all()
 
     def action_show_sessions(self) -> None:
         """Show the tmux session manager modal."""
@@ -677,24 +744,61 @@ class HostSelector(App):
             self.filter_hosts()
 
     def filter_hosts(self) -> None:
-        term = (self.search_filter or "").lower()
-        import fnmatch
+        raw = (self.search_filter or "").strip().lower()
 
-        term = (term or "").strip().lower()
+        if not raw:
+            self.filtered_hosts = self.hosts.copy()
+            self.populate_table(self.get_hosts_to_display())
+            self.update_status_selection()
+            return
 
-        # Automatically add wildcards around the search term
-        if not term.startswith("*"):
-            term = "*" + term
-        if not term.endswith("*"):
-            term = term + "*"
+        # Tokenize and build OR-of-AND-groups.
+        # Rules:
+        #   space        → implicit OR (each bare token starts a new OR clause)
+        #   'or' keyword → explicit OR (same effect as space)
+        #   'and' keyword → next token is AND-ed into the current clause
+        tokens = raw.split()
+        or_groups: list = []
+        current: list = []
+        next_is_and = False
 
-        self.filtered_hosts = [
-            host for host in self.hosts
-            if any(
-                fnmatch.fnmatchcase(str(getattr(host, attr, "") or "").lower(), term)
-                for attr in self.config.ui.table_columns
-            )
-        ]
+        for token in tokens:
+            if token == "or":
+                if current:
+                    or_groups.append(current)
+                    current = []
+                next_is_and = False
+            elif token == "and":
+                next_is_and = True
+            else:
+                if not next_is_and and current:
+                    # implicit OR: close the current AND-group
+                    or_groups.append(current)
+                    current = []
+                pattern = token if token.startswith("*") else f"*{token}"
+                pattern = pattern if pattern.endswith("*") else f"{pattern}*"
+                current.append(pattern)
+                next_is_and = False
+
+        if current:
+            or_groups.append(current)
+
+        if not or_groups:
+            self.filtered_hosts = self.hosts.copy()
+        else:
+            self.filtered_hosts = [
+                host for host in self.hosts
+                if any(
+                    all(
+                        any(
+                            fnmatch.fnmatchcase((getattr(host, attr, "") or "").lower(), term)
+                            for attr in self.config.ui.table_columns
+                        )
+                        for term in and_group
+                    )
+                    for and_group in or_groups
+                )
+            ]
 
         # Re-populate table with filtered results
         self.populate_table(self.get_hosts_to_display())
