@@ -109,7 +109,7 @@ class SSHplexConnector:
             )
             if proxy:
                 cmd_parts.extend([
-                    "-o", f"ProxyCommand=ssh -i {proxy.key_path} -W %h:%p {proxy.username}@{proxy.host}"
+                    "-J", f"{proxy.username}@{proxy.host} -i {proxy.key_path}"
                 ])
         except Exception as e:
             self.logger.error(f"SSHplex: Proxy not configured: {e}")
