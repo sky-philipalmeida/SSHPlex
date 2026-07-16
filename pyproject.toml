@@ -37,7 +37,8 @@ dependencies = [
     "loguru==0.7.3",
     "rich==13.9.4",
     "libtmux==0.46.1",
-    "pyperclip==1.11.0"
+    "pyperclip==1.11.0",
+    "python-consul2>=0.1.5"
 ]
 
 [project.optional-dependencies]
@@ -61,7 +62,7 @@ Documentation = "https://github.com/sabrimjd/sshplex#readme"
 
 [project.scripts]
 sshplex = "sshplex.main:main"
-sshplex-cli = "sshplex.cli:main"
+# sshplex-cli = "sshplex.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["sshplex*"]
