@@ -10,8 +10,11 @@ from textual.reactive import reactive
 from textual.screen import Screen
 from textual import events
 import asyncio
-import fnmatch
 import pyperclip
+from whoosh.filedb.filestore import RamStorage
+from whoosh.fields import Schema, TEXT, STORED
+from whoosh.analysis import RegexAnalyzer, LowercaseFilter
+from whoosh.qparser import MultifieldParser
 
 from ... import __version__
 from ..logger import get_logger
@@ -206,6 +209,9 @@ class HostSelector(App):
         self.cache_widget: Optional[Static] = None
         self.loading_screen: Optional[LoadingScreen] = None
         self.sort_reverse = False
+        self._search_index = None
+        self._search_schema = None
+        self._search_index_host_count = -1
 
     def compose(self) -> ComposeResult:
         """Create the UI layout."""
@@ -403,6 +409,7 @@ class HostSelector(App):
                 await asyncio.sleep(0.1)  # Allow UI to update
 
             self.hosts = self.sot_factory.get_all_hosts(force_refresh=force_refresh)
+            self.hosts.sort(key=self._col_sort_key)
             self.filtered_hosts = self.hosts.copy()  # Initialize filtered hosts
 
             if not self.hosts:
@@ -438,6 +445,16 @@ class HostSelector(App):
     def get_hosts_to_display(self)-> None:
       hosts_to_display = self.filtered_hosts if self.search_filter else self.hosts
       return hosts_to_display
+
+    def _col_sort_key(self, host: Host) -> tuple:
+        """Default sort key matching table_columns order."""
+        parts = []
+        for col in self.config.ui.table_columns:
+            v = getattr(host, col, host.metadata.get(col, "")) or ""
+            if isinstance(v, list):
+                v = "|".join(sorted(str(x) for x in v))
+            parts.append(str(v).lower())
+        return tuple(parts)
 
     def populate_table(self, hosts_to_display) -> None:
         """Populate the table with host data."""
@@ -733,7 +750,7 @@ class HostSelector(App):
     def on_input_changed(self, event: Input.Changed) -> None:
         """Handle search input changes."""
         if event.input == self.search_input:
-            self.search_filter = event.value.lower().strip()
+            self.search_filter = event.value.strip()
 
             # If search is cleared, hide the search container
             if not self.search_filter:
@@ -743,8 +760,37 @@ class HostSelector(App):
 
             self.filter_hosts()
 
+    def _build_search_index(self) -> None:
+        """Rebuild the RAM-backed whoosh index only when the host list changes."""
+        if self._search_index is not None and self._search_index_host_count == len(self.hosts):
+            return
+
+        columns = self.config.ui.table_columns
+        # tokenize on non-alphanumeric chars so "galera-01" → ["galera", "01"]
+        analyzer = RegexAnalyzer(r'[a-zA-Z0-9]+') | LowercaseFilter()
+        field_defs: dict = {col: TEXT(stored=False, analyzer=analyzer) for col in columns}
+        field_defs["host_idx"] = STORED()
+        schema = Schema(**field_defs)
+
+        st = RamStorage()
+        ix = st.create_index(schema)
+        writer = ix.writer()
+        for idx, host in enumerate(self.hosts):
+            doc: dict = {"host_idx": idx}
+            for col in columns:
+                val = getattr(host, col, host.metadata.get(col, "")) or ""
+                if isinstance(val, list):
+                    val = " ".join(str(v) for v in val)
+                doc[col] = str(val)
+            writer.add_document(**doc)
+        writer.commit()
+
+        self._search_schema = schema
+        self._search_index = ix
+        self._search_index_host_count = len(self.hosts)
+
     def filter_hosts(self) -> None:
-        raw = (self.search_filter or "").strip().lower()
+        raw = (self.search_filter or "").strip()
 
         if not raw:
             self.filtered_hosts = self.hosts.copy()
@@ -752,58 +798,21 @@ class HostSelector(App):
             self.update_status_selection()
             return
 
-        # Tokenize and build OR-of-AND-groups.
-        # Rules:
-        #   space        → implicit OR (each bare token starts a new OR clause)
-        #   'or' keyword → explicit OR (same effect as space)
-        #   'and' keyword → next token is AND-ed into the current clause
-        tokens = raw.split()
-        or_groups: list = []
-        current: list = []
-        next_is_and = False
+        self._build_search_index()
 
-        for token in tokens:
-            if token == "or":
-                if current:
-                    or_groups.append(current)
-                    current = []
-                next_is_and = False
-            elif token == "and":
-                next_is_and = True
-            else:
-                if not next_is_and and current:
-                    # implicit OR: close the current AND-group
-                    or_groups.append(current)
-                    current = []
-                pattern = token if token.startswith("*") else f"*{token}"
-                pattern = pattern if pattern.endswith("*") else f"{pattern}*"
-                current.append(pattern)
-                next_is_and = False
+        try:
+            parser = MultifieldParser(self.config.ui.table_columns, schema=self._search_schema)
+            query = parser.parse(raw)
+            with self._search_index.searcher() as searcher:
+                results = searcher.search(query, limit=None)
+                matched_indices = {r["host_idx"] for r in results}
+        except Exception:
+            matched_indices = set(range(len(self.hosts)))
 
-        if current:
-            or_groups.append(current)
+        self.filtered_hosts = [h for i, h in enumerate(self.hosts) if i in matched_indices]
 
-        if not or_groups:
-            self.filtered_hosts = self.hosts.copy()
-        else:
-            self.filtered_hosts = [
-                host for host in self.hosts
-                if any(
-                    all(
-                        any(
-                            fnmatch.fnmatchcase((getattr(host, attr, "") or "").lower(), term)
-                            for attr in self.config.ui.table_columns
-                        )
-                        for term in and_group
-                    )
-                    for and_group in or_groups
-                )
-            ]
-
-        # Re-populate table with filtered results
         self.populate_table(self.get_hosts_to_display())
 
-        # Update status
         if self.search_filter:
             filtered_count = len(self.filtered_hosts)
             total_count = len(self.hosts)

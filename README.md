@@ -166,6 +166,24 @@ Ctrl+b + x            # Close current pane
 Ctrl+b + z            # Zoom/unzoom current pane
 ```
 
+### Host Search
+
+Press `/` to open the search bar. Queries support full boolean logic across all visible columns (name, IP, cluster, tags, description, provider).
+
+| Query | Result |
+|-------|--------|
+| `web` | Hosts with a field token matching "web" (e.g. matches `web-server-01`) |
+| `web server` | Hosts matching both "web" AND "server" (space = AND) |
+| `web OR db` | Hosts matching either "web" or "db" |
+| `(galera AND plus) NOT arb` | Hosts matching galera+plus in any field, excluding those with "arb" |
+| `web NOT test` | Hosts with "web" but not "test" |
+| `NOT staging` | Exclude all hosts with "staging" in any field |
+| `name:galera` | Match "galera" in the name column only |
+| `aler*` | Prefix wildcard — matches `alertmanager`, `alerting`, etc. |
+| `*ler*` | Infix wildcard — matches any token containing "ler" |
+
+Boolean keywords `AND`, `OR`, `NOT` are case-sensitive. Bare terms match whole tokens; use `*term*` for substring matching. Press `Escape` to close the search bar.
+
 ## ⚙️ Configuration Options
 
 SSHplex now supports a flexible import-based configuration system that allows multiple named instances of any provider type:
