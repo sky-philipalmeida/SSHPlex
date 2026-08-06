@@ -45,6 +45,13 @@ class SSHplexConnector:
                 self.logger.error("SSHplex: Failed to create tmux session")
                 return False
 
+            columns = getattr(getattr(self.config, "ui", None), "table_columns", None) or ["name"]
+            hosts = sorted(hosts, key=lambda h: tuple(
+                "|".join(sorted(str(x) for x in v)) if isinstance(v := getattr(h, col, h.metadata.get(col, "")), list)
+                else ("" if v is None else str(v).lower())
+                for col in columns
+            ))
+
             success_count = 0
             for i, host in enumerate(hosts):
                 hostname = host.ip if host.ip else host.name

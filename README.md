@@ -166,6 +166,23 @@ Ctrl+b + x            # Close current pane
 Ctrl+b + z            # Zoom/unzoom current pane
 ```
 
+### Host Search
+
+Press `/` to open the search bar. Queries support full boolean logic across all visible columns (name, IP, cluster, tags, description, provider).
+
+| Query | Result |
+|-------|--------|
+| `web` | Hosts where any column contains "web" |
+| `web db` | Hosts containing "web" OR "db" (space = OR) |
+| `web AND production` | Hosts containing both "web" and "production" |
+| `web AND NOT test` | Hosts containing "web" but not "test" |
+| `NOT staging` | Exclude all hosts with "staging" in any column |
+| `192.168` | Substring match on IP |
+| `web AND 192.168.1` | Name contains "web" and IP in that subnet |
+| `*prod*` | Explicit wildcard (equivalent to bare `prod`) |
+
+Boolean keywords (`AND`, `OR`, `NOT`) are case-insensitive. Press `Escape` to close the search bar and return focus to the table.
+
 ## ⚙️ Configuration Options
 
 SSHplex now supports a flexible import-based configuration system that allows multiple named instances of any provider type:
