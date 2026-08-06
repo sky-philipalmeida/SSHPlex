@@ -750,7 +750,7 @@ class HostSelector(App):
     def on_input_changed(self, event: Input.Changed) -> None:
         """Handle search input changes."""
         if event.input == self.search_input:
-            self.search_filter = event.value.lower().strip()
+            self.search_filter = event.value.strip()
 
             # If search is cleared, hide the search container
             if not self.search_filter:
@@ -766,7 +766,8 @@ class HostSelector(App):
             return
 
         columns = self.config.ui.table_columns
-        analyzer = RegexAnalyzer(r'\S+') | LowercaseFilter()
+        # tokenize on non-alphanumeric chars so "galera-01" → ["galera", "01"]
+        analyzer = RegexAnalyzer(r'[a-zA-Z0-9]+') | LowercaseFilter()
         field_defs: dict = {col: TEXT(stored=False, analyzer=analyzer) for col in columns}
         field_defs["host_idx"] = STORED()
         schema = Schema(**field_defs)
@@ -799,23 +800,9 @@ class HostSelector(App):
 
         self._build_search_index()
 
-        # Normalize and/or/not to uppercase so whoosh treats them as boolean ops;
-        # wrap all other bare terms in *...* for substring matching.
-        _BOOL_OPS = {"AND", "OR", "NOT"}
-        processed_tokens = []
-        for token in raw.split():
-            upper = token.upper()
-            if upper in _BOOL_OPS:
-                processed_tokens.append(upper)
-            elif "*" in token or "?" in token or ":" in token or token in ("(", ")"):
-                processed_tokens.append(token)
-            else:
-                processed_tokens.append(f"*{token}*")
-        processed = " ".join(processed_tokens)
-
         try:
             parser = MultifieldParser(self.config.ui.table_columns, schema=self._search_schema)
-            query = parser.parse(processed)
+            query = parser.parse(raw)
             with self._search_index.searcher() as searcher:
                 results = searcher.search(query, limit=None)
                 matched_indices = {r["host_idx"] for r in results}
